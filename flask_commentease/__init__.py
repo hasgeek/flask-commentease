@@ -60,7 +60,9 @@ class VotingMixin(object):
         return relationship('VoteSpace', backref=cls.__tablename__, cascade='all, delete-orphan')
 
     #: Allow voting? This flag allows voting to be turned off if required
-    allow_voting = Column(Boolean, nullable=False, default=False)
+    @declared_attr
+    def allow_voting(cls):
+        return Column(Boolean, nullable=False, default=False)
 
 
 class CommentingMixin(object):
@@ -73,7 +75,9 @@ class CommentingMixin(object):
         return relationship('CommentSpace', backref=cls.__tablename__, cascade='all, delete-orphan')
 
     #: Allow comments? This flag allows commenting to be turned off if required
-    allow_comments = Column(Boolean, nullable=False, default=False)
+    @declared_attr
+    def allow_commenting(cls):
+        return Column(Boolean, nullable=False, default=False)
 
 
 class Commentease(object):
