@@ -12,13 +12,20 @@
 from markdown import Markdown
 import bleach
 from sqlalchemy import Column, ForeignKey, Boolean
-from sqlalchemy.orm import relationship
-from sqlalchemy.ext.declarative import declared_attr
+from sqlalchemy.orm import relationship, backref
+from sqlalchemy.ext.declarative import declared_attr, synonym_for
 from flask import Markup, request
 import flask.ext.wtf as wtf
-from coaster.sqlalchemy import BaseMixin
+from coaster.sqlalchemy import TimestampMixin, BaseMixin, BaseScopedIdMixin
 
 __all__ = ['Commentease', 'CommentingMixin', 'VotingMixin', 'CommenteaseActionError']
+
+
+class VOTE_PATTERN:
+    UP_ONLY = 1   # Allow only +1 votes
+    UP_DOWN = 2   # Allow +1 or -1 votes (for forums)
+    RANGE = 3     # Allow a voting range (scale of 1 to 10; -1, 0, +1, etc)
+    CUSTOM = 4    # Custom value storage (Commentease defers to app)
 
 
 class COMMENT_STATUS:
@@ -53,11 +60,12 @@ class CommenteaseActionError(Exception):
 class VotingMixin(object):
     @declared_attr
     def votes_id(cls):
-        return Column(None, ForeignKey('votespace.id'), nullable=True)
+        return Column(None, ForeignKey('voteset.id'), nullable=True)
 
     @declared_attr
     def votes(cls):
-        return relationship('VoteSpace', backref=cls.__tablename__, single_parent=True, cascade='all, delete-orphan')
+        return relationship('VoteSet', lazy='joined', single_parent=True,
+            backref=backref(cls.__tablename__ + '_parent', cascade='all, delete-orphan'))
 
     #: Allow voting? This flag allows voting to be turned off if required
     @declared_attr
@@ -68,11 +76,12 @@ class VotingMixin(object):
 class CommentingMixin(object):
     @declared_attr
     def comments_id(cls):
-        return Column(None, ForeignKey('commentspace.id'), nullable=True)
+        return Column(None, ForeignKey('commentset.id'), nullable=True)
 
     @declared_attr
     def comments(cls):
-        return relationship('CommentSpace', backref=cls.__tablename__, single_parent=True, cascade='all, delete-orphan')
+        return relationship('CommentSet', lazy='subquery', single_parent=True,
+            backref=backref(cls.__tablename__ + '_parent', cascade='all, delete-orphan'))
 
     #: Allow comments? This flag allows commenting to be turned off if required
     @declared_attr
@@ -128,68 +137,133 @@ class Commentease(object):
         if 'COMMENT_ATTRIBUTES' in app.config:
             self.sanitize_attributes = app.config['COMMENT_ATTRIBUTES']
 
-    def init_db(self, db):
+    def init_db(self, db, userid='user.id', usermodel='User'):
         self.db = db
 
         # Create models that are linked to this database object
-        class Vote(BaseMixin, db.Model):
+        class Vote(TimestampMixin, db.Model):
             __tablename__ = 'vote'
-            user_id = db.Column(None, db.ForeignKey('user.id'), nullable=False)
-            user = db.relationship('User',
+            #: Id of user who voted
+            user_id = db.Column(None, db.ForeignKey(userid), nullable=False, primary_key=True)
+            #: User who voted
+            user = db.relationship(usermodel,
                 backref=db.backref('votes', cascade="all, delete-orphan"))
-            votespace_id = db.Column(None, db.ForeignKey('votespace.id'), nullable=False)
-            votespace = db.relationship('VoteSpace',
+            #: Id of voteset
+            voteset_id = db.Column(None, db.ForeignKey('voteset.id'), nullable=False, primary_key=True)
+            #: VoteSet this vote is a part of
+            voteset = db.relationship('VoteSet',
                 backref=db.backref('votes', cascade="all, delete-orphan"))
-            votedown = db.Column(db.Boolean, default=False, nullable=False)
+            #: Voting data. Contents vary based on voting pattern (boolean, range, flags)
+            data = db.Column(db.Integer, nullable=True)
 
-            __table_args__ = (db.UniqueConstraint("user_id", "votespace_id"), {})
-
-        class VoteSpace(BaseMixin, db.Model):
-            __tablename__ = 'votespace'
+        class VoteSet(BaseMixin, db.Model):
+            __tablename__ = 'voteset'
+            #: Type of entity getting voted on
             type = db.Column(db.Unicode(4), nullable=True)
+            #: Number of votes
             count = db.Column(db.Integer, default=0, nullable=False)
-            downvoting = db.Column(db.Boolean, nullable=False, default=True)
+            #: Voting score (sum of votes)
+            score = db.Column(db.Integer, default=0, nullable=False)
+            #: Voting average
+            average = db.column_property(score / count)
+            #: Voting pattern
+            pattern = db.Column(db.SmallInteger, nullable=False, default=VOTE_PATTERN.UP_DOWN)
+            #: Range vote minimum (optional)
+            min = db.Column(db.Integer, nullable=True)
+            #: Range vote maximum (optional)
+            max = db.Column(db.Integer, nullable=True)
 
             def __init__(self, **kwargs):
-                super(VoteSpace, self).__init__(**kwargs)
+                super(VoteSet, self).__init__(**kwargs)
                 self.count = 0
+                self.score = 0
 
-            def vote(self, user, votedown=False):
-                vote = Vote.query.filter_by(user=user, votespace=self).first()
-                if votedown and not self.downvoting:
-                    # Ignore downvotes if disallowed
-                    return
-                if not vote:
-                    vote = Vote(user=user, votespace=self, votedown=votedown)
-                    self.count += 1 if not votedown else -1
-                    db.session.add(vote)
+            def vote(self, user, data=None):
+                vote = self.getvote(user)
+                # The following count and score incrementing operations work with SQL expressions
+                # rather than actual values to handle concurrency. Offloading calculations to the
+                # database prevents concurrent updates from messing up the values.
+                if self.pattern == VOTE_PATTERN.UP_ONLY:
+                    if data is not None:
+                        raise ValueError("Invalid vote data: %s." % data)
+                    if not vote:
+                        vote = Vote(user=user, voteset=self)
+                        db.session.add(vote)
+                        self.count = self.__table__.c.count + 1
+                        self.score = self.__table__.c.score + 1
+                elif self.pattern == VOTE_PATTERN.UP_DOWN:
+                    if data not in [+1, -1]:
+                        raise ValueError("Invalid vote data: %s." % data)
+                    if not vote:
+                        vote = Vote(user=user, voteset=self, data=data)
+                        db.session.add(vote)
+                        self.count = self.__table__.c.count + 1
+                        self.score = self.__table__.c.score + data
+                    else:
+                        if data != vote.data:
+                            # Recalculate score
+                            vote.data = data
+                            self.score = self.__table__.c.score + (data * 2)
+                elif self.pattern == VOTE_PATTERN.RANGE:
+                    if self.min <= data <= self.max:
+                        raise ValueError("Vote data out of range %d <= %d <= %d." % (
+                            self.min, data, self.max))
+                    if not vote:
+                        vote = Vote(user=user, voteset=self, data=data)
+                        db.session.add(vote)
+                        self.count = self.__table__.c.count + 1
+                        self.score = self.__table__.c.score + data
+                    else:
+                        if data != vote.data:
+                            self.score = self.__table__.c.score - vote.data + data
+                            vote.data = data
+                elif self.pattern == VOTE_PATTERN.CUSTOM:
+                    if not vote:
+                        vote = Vote(user=user, voteset=self, data=data)
+                        self.db.session.add(vote)
+                        self.count = self.__table__.c.count + 1
+                    else:
+                        vote.data = data
+                    # We don't know how to calculate score for custom votes. Return vote
+                    # and let the caller manage the score.
                 else:
-                    if vote.votedown != votedown:
-                        self.count += 2 if not votedown else -2
-                    vote.votedown = votedown
+                    # This shouldn't happen. This VoteSet has an invalid pattern type.
+                    raise ValueError("Unknown voting pattern.")
                 return vote
 
             def cancelvote(self, user):
-                vote = Vote.query.filter_by(user=user, votespace=self).first()
+                vote = self.getvote(user)
                 if vote:
-                    self.count += 1 if vote.votedown else -1
+                    self.count = self.__table__.c.count - 1
+                    if self.pattern == VOTE_PATTERN.UP_ONLY:
+                        self.score = self.__table__.c.score - 1
+                    elif self.pattern in (VOTE_PATTERN.UP_DOWN, VOTE_PATTERN.RANGE):
+                        self.score = self.__table__.c.score - vote.data
+                    elif self.pattern == VOTE_PATTERN.CUSTOM:
+                        pass  # Do nothing. App maintains score.
+                    else:
+                        # This shouldn't happen. This VoteSet has an invalid pattern type.
+                        raise ValueError("Unknown voting pattern.")
                     db.session.delete(vote)
 
             def recount(self):
-                self.count = sum(+1 if v.votedown is False else -1 for v in self.votes)
+                self.count = len(self.votes)
+                if self.pattern != VOTE_PATTERN.CUSTOM:
+                    self.score = sum([v.data for v in self.votes])
 
             def getvote(self, user):
-                return Vote.query.filter_by(user=user, votespace=self).first()
+                return Vote.query.get(user.id, self.id)
 
-        class Comment(BaseMixin, db.Model):
+        class Comment(BaseScopedIdMixin, db.Model):
             __tablename__ = 'comment'
-            user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
-            user = db.relationship('User',
+            user_id = db.Column(db.Integer, db.ForeignKey(userid), nullable=True)
+            user = db.relationship(usermodel,
                 backref=db.backref('comments', cascade="all"))
-            commentspace_id = db.Column(db.Integer, db.ForeignKey('commentspace.id'), nullable=False)
-            commentspace = db.relationship('CommentSpace',
+            commentset_id = db.Column(db.Integer, db.ForeignKey('commentset.id'), nullable=False)
+            commentset = db.relationship('CommentSet',
                 backref=db.backref('comments', cascade="all, delete-orphan"))
 
+            # TODO: Remove this and use CommentTree.
             reply_to_id = db.Column(db.Integer, db.ForeignKey('comment.id'), nullable=True)
             replies = db.relationship('Comment', backref=db.backref("reply_to", remote_side='Comment.id'))
 
@@ -197,17 +271,18 @@ class Commentease(object):
             message = db.Column(db.Text, nullable=False)
             _message_html = db.Column('message_html', db.Text, nullable=False)
 
-            status = db.Column(db.Integer, default=0, nullable=False)
+            status = db.Column(db.SmallInteger, default=0, nullable=False)
 
-            votes_id = db.Column(db.Integer, db.ForeignKey('votespace.id'), nullable=False)
-            votes = db.relationship(VoteSpace, uselist=False)
+            votes_id = db.Column(db.Integer, db.ForeignKey('voteset.id'), nullable=False)
+            votes = db.relationship(VoteSet, uselist=False)
 
             edited_at = db.Column(db.DateTime, nullable=True)
 
             def __init__(self, downvoting=True, **kwargs):
                 super(Comment, self).__init__(**kwargs)
-                self.votes = VoteSpace(type=u'CMNT', downvoting=downvoting)
+                self.votes = VoteSet(type=u'CMNT', downvoting=downvoting)
 
+            @synonym_for("_message_html")
             @property
             def message_html(self):
                 return Markup(self._message_html)
@@ -238,32 +313,51 @@ class Commentease(object):
             def sorted_replies(self):
                 return sorted(self.replies, key=lambda reply: reply.votes.count)
 
-        class CommentSpace(BaseMixin, db.Model):
-            __tablename__ = 'commentspace'
+        class CommentSet(BaseMixin, db.Model):
+            __tablename__ = 'commentset'
+            #: Type of entity being voted on
             type = db.Column(db.Unicode(4), nullable=True)
+            #: Number of comments
             count = db.Column(db.Integer, default=0, nullable=False)
+            #: Is downvoting a comment allowed? (selects voting pattern)
             downvoting = db.Column(db.Boolean, nullable=False, default=True)
 
             def __init__(self, **kwargs):
-                super(CommentSpace, self).__init__(**kwargs)
+                super(CommentSet, self).__init__(**kwargs)
                 self.count = 0
 
             def recount(self):
                 self.count = sum(1 for c in self.comments if c.status == COMMENT_STATUS.PUBLIC)
 
-        self.VoteSpace = VoteSpace
-        self.Vote = Vote
-        self.CommentSpace = CommentSpace
-        self.Comment = Comment
+        class CommentTree(db.Model):
+            __tablename__ = 'comment_tree'
+            #: Parent comment id
+            parent_id = db.Column(None, db.ForeignKey('comment.id'), nullable=False, primary_key=True)
+            #: Parent comment
+            parent = db.relationship(Comment, primaryjoin=parent_id == Comment.id,
+                backref=db.backref('childtree', cascade='all, delete-orphan'))
+            #: Child comment id
+            child_id = db.Column(None, db.ForeignKey('comment.id'), nullable=False, primary_key=True)
+            #: Child comment
+            child = db.relationship(Comment, primaryjoin=child_id == Comment.id,
+                backref=db.backref('parenttree', cascade='all, delete-orphan'))
+            #: Path length
+            path_length = db.Column(db.SmallInteger, nullable=False)
 
-    # View handlers. These functions consolidate all possible actions on a votespace
-    # or commentspace into one handler each. Implementing apps must provide one view
+        self.Vote = Vote
+        self.VoteSet = VoteSet
+        self.Comment = Comment
+        self.CommentSet = CommentSet
+        self.CommentTree = CommentTree
+
+    # View handlers. These functions consolidate all possible actions on a voteset
+    # or commentset into one handler each. Implementing apps must provide one view
     # handler for each that performs the necessary basic validations (such as access
-    # permissions), looks up the appropriate votespace or commentspace, and calls
+    # permissions), looks up the appropriate voteset or commentset, and calls
     # these handlers to implement the rest.
 
     # Vote view handler
-    def vote_action(self, votespace):
+    def vote_action(self, voteset):
         if request.method == 'POST':
             form = CsrfForm()
             if form.validate():
@@ -280,5 +374,5 @@ class Commentease(object):
                 return form
 
     # Comment view handler
-    def comment_action(self, commentspace):
+    def comment_action(self, commentset):
         pass

@@ -11,6 +11,7 @@ requires = [
     'Flask-WTF',
     'coaster',
     'markdown',
+    'Pygments',
     'bleach',
     ]
 
