@@ -1,0 +1,101 @@
+{%- from "baseframe/forms.html" import renderfield, ajaxform %}
+{% macro commentvote(comment, currentuser, commenturl) %}
+  <div class="comment-vote">
+    {%- set comvote = comment.votes.getvote(currentuser) %}
+    {%- if not comvote -%}
+      <a class="comment-vote-up" title="Vote up" data-id="{{ comment.id }}" data-action="voteup" href="{{ commenturl }}">&#x25b2;</a><br/>
+      <span class="count">{{ comment.votes.count }}</span><br/>
+      <a class="comment-vote-down" title="Vote down" data-id="{{ comment.id }}" data-action="votedown" href="{{ commenturl }}">&#x25bc;</a><br/>
+    {%- elif not comvote.votedown -%}
+      <a class="comment-vote-cancel" title="Withdraw vote" data-id="{{ comment.id }}" data-action="cancelvote" href="{{ commenturl }}">&#x25b2;</a><br/>
+      <span class="count">{{ comment.votes.count }}</span><br/>
+      <a class="comment-vote-down" title="Vote down" data-id="{{ comment.id }}" data-action="votedown" href="{{ commenturl }}">&#x25bc;</a><br/>
+    {%- else -%}
+      <a class="comment-vote-up" title="Vote up" data-id="{{ comment.id }}" data-action="voteup" href="{{ commenturl }}">&#x25b2;</a><br/>
+      <span class="count">{{ comment.votes.count }}</span><br/>
+      <a class="comment-vote-cancel" title="Withdraw vote" data-id="{{ comment.id }}" data-action="cancelvote" href="{{ commenturl }}">&#x25bc;</a><br/>
+    {%- endif %}
+  </div>
+{% endmacro %}
+
+{% macro commenttree(comments, document, currentuser, commenturl) %}
+  {%- for comment in comments %}
+    <li class="comment">
+      <div id="c{{ comment.id }}">
+        {{ commentvote(comment, currentuser, commenturl) }}
+        <div class="com-header">
+          <a class="collapse" href="#">[-]</a><a class="uncollapse hidden" href="#">[+]</a>
+          {% if comment.is_deleted -%}
+            <span class="commenter">[deleted]</span>
+          {%- else -%}
+            <span class="commenter {%- if comment.user == document.user %} selected{% endif %}">{{ comment.user.fullname }}</span>
+            {{ comment.created_at|age }}
+            {%- if comment.edited_at %}
+              (edited {{ comment.edited_at|age }})
+            {%- endif %}
+          {%- endif %}
+        </div>
+        <div class="com-body">
+          {% if not comment.is_deleted -%}
+            {{ comment.message_html|safe }}
+          {%- endif %}
+          <div data-id="{{ comment.id }}" class="com-footer">
+            {% if not comment.is_deleted %}
+              <a title="Reply" class="comment-reply" href="#c{{ comment.id }}">[reply]</a>
+              {% if comment.user == currentuser -%}
+                <a title="Edit" class="comment-edit" href="#c{{ comment.id }}">[edit]</a>
+                <a title="Delete" class="comment-delete" href="#c{{ comment.id }}">[delete]</a>
+              {%- endif %}
+            {%- endif %}
+            <a title="Permalink" class="comment-permalink" href="#c{{ comment.id }}">[link]</a>
+            {% if comment.parent %}<a title="Parent" class="comment-parent" href="#c{{ comment.parent.id }}">[parent]</a>{% endif %}
+          </div>
+        </div>
+      </div>
+      {% if comment.children %}
+        <ul class="com-children">
+          {{ commenttree(comment.sorted_children(), document, currentuser, commenturl) }}
+        </ul>
+      {% endif %}
+    </li>
+  {% endfor -%}
+{% endmacro %}
+
+{% macro commentform(form, commenturl) %}
+  <form method="POST" id="newcomment" action="{{ commenturl }}">
+    <input type="hidden" name="form.id" value="newcomment"/>
+    {{ form.hidden_tag() }}
+    {{ renderfield(form.message) }}
+    <input id="comment-submit" type="submit" class="btn btn-primary" value="Post comment"/>
+  </form>
+{% endmacro %}
+
+{% macro comments(document, currentuser, commenturl, forms) %}
+  <ul class="commentease">
+    {{ commenttree(document.comments.comments, document, currentuser, commenturl) }}
+  </ul>
+  {%- if not currentuser %}
+    <p>
+      <a href="{{ url_for('login') }}">Login with Twitter or Google to leave a comment &rarr;</a>
+    </p>
+  {%- else %}
+    <p id="toplevel-comment" class="hidden">
+      <a href="#">Post a comment &rarr;</a>
+      <span class="loading hidden">&nbsp;</span>
+    </p>
+    {{ commentform(forms['comment'], commenturl) }}
+    <form method="POST" id="delcomment" class="hidden" action="{{ commenturl }}">
+      <input type="hidden" name="form.id" value="delcomment"/>
+      {{ forms['delcomment'].hidden_tag() }}
+      <p>
+        Really delete this comment?
+        <input id="comment-delete-submit" class="btn btn-danger" type="submit" value="Delete"/>
+        or <a id="comment-delete-cancel" class="btn" href="#">cancel</a>
+      </p>
+    </form>
+  {% endif %}
+{% endmacro %}
+
+{% macro ajaxcomments(request) %}
+  {{ ajaxform('newcomment', request, true) }}
+{% endmacro %}

@@ -1,0 +1,112 @@
+@import "compass";
+
+// Colors from funnel, used or not
+$color-shadow: rgba(0, 0, 0, 0.4);
+$color-sheet: #fff;
+$color-sheet-border: #afafaf;
+$color-post-date: gray;
+
+$color-title-h1: #df5e0e;
+$color-title-h2: #816894;
+$color-title-h3: #f0a40c;
+
+$color-flash: #ffffa2;
+$color-stickie: #ffffa2;
+
+$color-highlight: #f0a40c;
+
+$color-radio-selected: $color-highlight;
+$color-required: $color-title-h1;
+$color-outline: #b7b7b7;
+$color-outline-thin: #e8e8e8;
+$color-card-border: #afafaf;
+$color-sheet-border: #afafaf;
+
+$color-listing-background: $color-outline-thin;
+$color-listing-outline: $color-outline;
+$color-listing-even: #f6f6f6;
+$color-listing-hover: #D9E8F0; //rgba(232, 232, 232, 0.8);
+
+$color-link: $color-title-h2;
+$color-link-metadata: $color-outline;
+
+$color-infobox-term: $color-outline-thin;
+$color-infobox-description: #f6f6f6;
+
+$color-bar: #fff;
+$color-bar-background: $color-title-h1; //#D9E8F0; //$color-outline-thin;
+$color-section-heading: #444;
+$color-section-heading-background: #D9E8F0; //#E9C367;
+
+
+.commentease {
+    list-style: none;
+    margin-left: 0;
+    padding-left: 1em;
+    p, blockquote, ul, ol, table, dl {
+        margin-top: 0.5em;
+        margin-bottom: 0.5em;
+    }
+    li.comment {
+        position: relative;
+        padding: 0.5em 0.5em;
+        margin: 0;
+        min-height: 3em;
+    }
+    div:target {
+        margin: -0.25em;
+        padding: 0.25em;
+        background-color: $color-flash; //$color-listing-hover;
+        @include border-radius(3px);
+    }
+    .collapse, .uncollapse {
+        font-family: monospace;
+    }
+    .comment-vote {
+        position: absolute;
+        text-align: center;
+        left: -2em;
+        width: 2em;
+        font-size: 80%;
+        a {
+            color: $color-link-metadata;
+        }
+        a:hover {
+            text-decoration: none;
+            color: $color-link;
+        }
+        a.comment-vote-cancel {
+            color: $color-link;
+        }
+    }
+    .com-children {
+        border-left: 1px dotted $color-outline;
+        list-style: none;
+        margin-left: 0;
+        padding-left: 2em;
+        margin-bottom: 0;
+    }
+    .com-header, .com-footer {
+        font-size: 80%;
+        color: $color-link-metadata;
+        .commenter {
+            color: #444;
+            font-weight: bold;
+        }
+        .commenter.selected {
+            color: $color-section-heading;
+            background-color: $color-section-heading-background;
+            padding: 1px 0.25em;
+            @include border-radius(3px);
+        }
+    }
+    .com-header a,
+    .com-footer a {
+        color: $color-link-metadata;
+    }
+    .com-header a:hover,
+    .com-footer a:hover {
+        color: $color-link;
+        text-decoration: none;
+    }
+}

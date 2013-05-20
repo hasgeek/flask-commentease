@@ -1,0 +1,79 @@
+.commentease {
+  list-style: none;
+  margin-left: 0;
+  padding-left: 1em;
+}
+.commentease p, .commentease blockquote, .commentease ul, .commentease ol, .commentease table, .commentease dl {
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+.commentease li.comment {
+  position: relative;
+  padding: 0.5em 0.5em;
+  margin: 0;
+  min-height: 3em;
+}
+.commentease div:target {
+  margin: -0.25em;
+  padding: 0.25em;
+  background-color: #ffffa2;
+  -webkit-border-radius: 3px;
+  -moz-border-radius: 3px;
+  -ms-border-radius: 3px;
+  -o-border-radius: 3px;
+  border-radius: 3px;
+}
+.commentease .collapse, .commentease .uncollapse {
+  font-family: monospace;
+}
+.commentease .comment-vote {
+  position: absolute;
+  text-align: center;
+  left: -2em;
+  width: 2em;
+  font-size: 80%;
+}
+.commentease .comment-vote a {
+  color: #b7b7b7;
+}
+.commentease .comment-vote a:hover {
+  text-decoration: none;
+  color: #816894;
+}
+.commentease .comment-vote a.comment-vote-cancel {
+  color: #816894;
+}
+.commentease .com-children {
+  border-left: 1px dotted #b7b7b7;
+  list-style: none;
+  margin-left: 0;
+  padding-left: 2em;
+  margin-bottom: 0;
+}
+.commentease .com-header, .commentease .com-footer {
+  font-size: 80%;
+  color: #b7b7b7;
+}
+.commentease .com-header .commenter, .commentease .com-footer .commenter {
+  color: #444;
+  font-weight: bold;
+}
+.commentease .com-header .commenter.selected, .commentease .com-footer .commenter.selected {
+  color: #444444;
+  background-color: #d9e8f0;
+  padding: 1px 0.25em;
+  -webkit-border-radius: 3px;
+  -moz-border-radius: 3px;
+  -ms-border-radius: 3px;
+  -o-border-radius: 3px;
+  border-radius: 3px;
+}
+.commentease .com-header a,
+.commentease .com-footer a {
+  color: #b7b7b7;
+}
+.commentease .com-header a:hover,
+.commentease .com-footer a:hover {
+  color: #816894;
+  text-decoration: none;
+}

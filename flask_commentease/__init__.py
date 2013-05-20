@@ -5,20 +5,28 @@
 
     Flask extension for comments and votes on any database model
 
-    :copyright: (c) 2011-12 by HasGeek Media LLP.
+    :copyright: (c) 2011-13 by HasGeek Media LLP.
     :license: BSD, see LICENSE for more details.
 """
 
-from markdown import Markdown
 import bleach
+from datetime import datetime
+from flask import g, Blueprint, Markup, request, flash, redirect
 from sqlalchemy import Column, ForeignKey, Boolean
+from sqlalchemy.sql import select
 from sqlalchemy.orm import relationship, backref
-from sqlalchemy.ext.declarative import declared_attr, synonym_for
-from flask import Markup, request
+from sqlalchemy.ext.declarative import declared_attr
 import flask.ext.wtf as wtf
+from coaster.gfm import markdown
 from coaster.sqlalchemy import TimestampMixin, BaseMixin, BaseScopedIdMixin
+from baseframe import assets, Version
+from ._version import __version__
 
 __all__ = ['Commentease', 'CommentingMixin', 'VotingMixin', 'CommenteaseActionError']
+
+version = Version(__version__)
+#assets['commentease.js'][version] = 'commentease/js/commentease.js'
+assets['commentease.css'][version] = 'commentease/css/commentease.css'
 
 
 class VOTE_PATTERN:
@@ -48,9 +56,13 @@ class CommentForm(wtf.Form):
     """
     Comment form
     """
-    reply_to_id = wtf.HiddenField("Parent", default='', id='comment_reply_to_id')
+    reply_to_id = wtf.HiddenField("Reply to", default='', id='comment_reply_to_id')
     edit_id = wtf.HiddenField("Edit", default='', id='comment_edit_id')
     message = wtf.TextAreaField("Add comment", id='comment_message', validators=[wtf.Required()])
+
+
+class DeleteCommentForm(wtf.Form):
+    comment_id = wtf.HiddenField('Comment', validators=[wtf.Required()])
 
 
 class CommenteaseActionError(Exception):
@@ -65,7 +77,7 @@ class VotingMixin(object):
     @declared_attr
     def votes(cls):
         return relationship('VoteSet', lazy='joined', single_parent=True,
-            backref=backref(cls.__tablename__ + '_parent', cascade='all, delete-orphan'))
+            backref=backref(cls.__tablename__ + '_parent'), cascade='all, delete-orphan')
 
     #: Allow voting? This flag allows voting to be turned off if required
     @declared_attr
@@ -81,12 +93,18 @@ class CommentingMixin(object):
     @declared_attr
     def comments(cls):
         return relationship('CommentSet', lazy='subquery', single_parent=True,
-            backref=backref(cls.__tablename__ + '_parent', cascade='all, delete-orphan'))
+            backref=backref(cls.__tablename__ + '_parent'), cascade='all, delete-orphan')
 
     #: Allow comments? This flag allows commenting to be turned off if required
     @declared_attr
     def allow_commenting(cls):
         return Column(Boolean, nullable=False, default=False)
+
+
+commentease_blueprint = Blueprint('commentease', __name__,
+    static_folder='static',
+    static_url_path='/static/commentease',
+    template_folder='templates')
 
 
 class Commentease(object):
@@ -106,10 +124,7 @@ class Commentease(object):
 
         self.parsers = {
             'html': self.sanitize,
-            'markdown': Markdown(safe_mode='escape', output_format='html5',
-                                 extensions=['codehilite'],
-                                 extension_configs={'codehilite': {'css_class': 'syntax'}}
-                                 ).convert
+            'markdown': markdown
             }
 
         if app is not None:
@@ -132,6 +147,8 @@ class Commentease(object):
 
     def init_app(self, app):
         self.app = app
+        app.register_blueprint(commentease_blueprint)
+
         if 'COMMENT_TAGS' in app.config:
             self.sanitize_tags = app.config['COMMENT_TAGS']
         if 'COMMENT_ATTRIBUTES' in app.config:
@@ -165,7 +182,7 @@ class Commentease(object):
             #: Voting score (sum of votes)
             score = db.Column(db.Integer, default=0, nullable=False)
             #: Voting average
-            average = db.column_property(score / count)
+            # average = db.column_property(score / count)  # Causes division by zero errors
             #: Voting pattern
             pattern = db.Column(db.SmallInteger, nullable=False, default=VOTE_PATTERN.UP_DOWN)
             #: Range vote minimum (optional)
@@ -189,21 +206,38 @@ class Commentease(object):
                     if not vote:
                         vote = Vote(user=user, voteset=self)
                         db.session.add(vote)
-                        self.count = self.__table__.c.count + 1
-                        self.score = self.__table__.c.score + 1
+                        if self.id is not None:
+                            self.count = select([self.__table__.c.count]).where(
+                                self.__table__.c.id == self.id).as_scalar() + 1
+                            self.score = select([self.__table__.c.score]).where(
+                                self.__table__.c.id == self.id).as_scalar() + 1
+                        else:
+                            self.count = 1
+                            self.score = data
                 elif self.pattern == VOTE_PATTERN.UP_DOWN:
                     if data not in [+1, -1]:
                         raise ValueError("Invalid vote data: %s." % data)
                     if not vote:
                         vote = Vote(user=user, voteset=self, data=data)
                         db.session.add(vote)
-                        self.count = self.__table__.c.count + 1
-                        self.score = self.__table__.c.score + data
+                        if self.id is not None:
+                            self.count = select([self.__table__.c.count]).where(
+                                self.__table__.c.id == self.id).as_scalar() + 1
+                            self.score = select([self.__table__.c.score]).where(
+                                self.__table__.c.id == self.id).as_scalar() + data
+                        else:
+                            self.count = 1
+                            self.score = data
                     else:
                         if data != vote.data:
                             # Recalculate score
                             vote.data = data
-                            self.score = self.__table__.c.score + (data * 2)
+                            if self.id is not None:
+                                self.score = select([self.__table__.c.score]).where(
+                                    self.__table__.c.id == self.id).as_scalar() + (data * 2)
+                            else:
+                                # We should never get here. Can't have vote but no voteset
+                                self.score = data
                 elif self.pattern == VOTE_PATTERN.RANGE:
                     if self.min <= data <= self.max:
                         raise ValueError("Vote data out of range %d <= %d <= %d." % (
@@ -211,17 +245,28 @@ class Commentease(object):
                     if not vote:
                         vote = Vote(user=user, voteset=self, data=data)
                         db.session.add(vote)
-                        self.count = self.__table__.c.count + 1
-                        self.score = self.__table__.c.score + data
+                        if self.id is not None:
+                            self.count = select([self.__table__.c.count]).where(
+                                self.__table__.c.id == self.id).as_scalar() + 1
+                            self.score = select([self.__table__.c.score]).where(
+                                self.__table__.c.id == self.id).as_scalar() + data
+                        else:
+                            self.count = 1
+                            self.score = data
                     else:
                         if data != vote.data:
-                            self.score = self.__table__.c.score - vote.data + data
+                            self.score = select([self.__table__.c.score]).where(
+                                self.__table__.c.id == self.id).as_scalar() - vote.data + data
                             vote.data = data
                 elif self.pattern == VOTE_PATTERN.CUSTOM:
                     if not vote:
                         vote = Vote(user=user, voteset=self, data=data)
                         self.db.session.add(vote)
-                        self.count = self.__table__.c.count + 1
+                        if self.id is not None:
+                            self.count = select([self.__table__.c.count]).where(
+                                self.__table__.c.id == self.id).as_scalar() + 1
+                        else:
+                            self.count = 1
                     else:
                         vote.data = data
                     # We don't know how to calculate score for custom votes. Return vote
@@ -252,7 +297,7 @@ class Commentease(object):
                     self.score = sum([v.data for v in self.votes])
 
             def getvote(self, user):
-                return Vote.query.get(user.id, self.id)
+                return Vote.query.get((user.id, self.id))
 
         class Comment(BaseScopedIdMixin, db.Model):
             __tablename__ = 'comment'
@@ -262,14 +307,15 @@ class Commentease(object):
             commentset_id = db.Column(db.Integer, db.ForeignKey('commentset.id'), nullable=False)
             commentset = db.relationship('CommentSet',
                 backref=db.backref('comments', cascade="all, delete-orphan"))
+            parent = db.synonym('commentset')
 
             # TODO: Remove this and use CommentTree.
             reply_to_id = db.Column(db.Integer, db.ForeignKey('comment.id'), nullable=True)
             replies = db.relationship('Comment', backref=db.backref("reply_to", remote_side='Comment.id'))
 
             parser = db.Column(db.Unicode(10), default=u'markdown', nullable=False)
-            message = db.Column(db.Text, nullable=False)
-            _message_html = db.Column('message_html', db.Text, nullable=False)
+            _message = db.Column('message', db.UnicodeText, nullable=False)
+            _message_html = db.Column('message_html', db.UnicodeText, nullable=False)
 
             status = db.Column(db.SmallInteger, default=0, nullable=False)
 
@@ -278,11 +324,19 @@ class Commentease(object):
 
             edited_at = db.Column(db.DateTime, nullable=True)
 
-            def __init__(self, downvoting=True, **kwargs):
+            def __init__(self, votepattern=VOTE_PATTERN.UP_DOWN, **kwargs):
                 super(Comment, self).__init__(**kwargs)
-                self.votes = VoteSet(type=u'CMNT', downvoting=downvoting)
+                self.votes = VoteSet(type=u'CMNT', pattern=votepattern)
 
-            @synonym_for("_message_html")
+            @property
+            def message(self):
+                return self._message
+
+            @message.setter
+            def message(self, value):
+                self._message = value
+                self._message_html = markdown(value)
+
             @property
             def message_html(self):
                 return Markup(self._message_html)
@@ -295,7 +349,6 @@ class Commentease(object):
                     self.status = COMMENT_STATUS.DELETED
                     self.user = None
                     self.message = ''
-                    self.message_html = ''
                 else:
                     if self.reply_to and self.reply_to.is_deleted:
                         # If the parent (reply_to) is deleted, ask it to reconsider removing itself
@@ -319,17 +372,36 @@ class Commentease(object):
             type = db.Column(db.Unicode(4), nullable=True)
             #: Number of comments
             count = db.Column(db.Integer, default=0, nullable=False)
+            #: Number of top-level comments
+            count_toplevel = db.Column(db.Integer, default=0, nullable=False)
+            #: Number of reply comments
+            count_replies = db.Column(db.Integer, default=0, nullable=False)
             #: Is downvoting a comment allowed? (selects voting pattern)
             downvoting = db.Column(db.Boolean, nullable=False, default=True)
 
             def __init__(self, **kwargs):
                 super(CommentSet, self).__init__(**kwargs)
-                self.count = 0
+                self.count = self.count_toplevel = self.count_replies = 0
 
             def recount(self):
-                self.count = sum(1 for c in self.comments if c.status == COMMENT_STATUS.PUBLIC)
+                toplevel = replies = 0
+                for comment in self.comments:
+                    if comment.status == COMMENT_STATUS.PUBLIC:
+                        if comment.reply_to is None:
+                            toplevel += 1
+                        else:
+                            replies += 1
 
-        class CommentTree(db.Model):
+                self.count_toplevel = toplevel
+                self.count_replies = replies
+                self.count = toplevel + replies
+
+        # TODO: Use this
+        class CommentTree(TimestampMixin, db.Model):
+            """
+            The comment tree implements a closure set structure to help navigate up and down
+            a hierarchical comment thread.
+            """
             __tablename__ = 'comment_tree'
             #: Parent comment id
             parent_id = db.Column(None, db.ForeignKey('comment.id'), nullable=False, primary_key=True)
@@ -341,8 +413,8 @@ class Commentease(object):
             #: Child comment
             child = db.relationship(Comment, primaryjoin=child_id == Comment.id,
                 backref=db.backref('parenttree', cascade='all, delete-orphan'))
-            #: Path length
-            path_length = db.Column(db.SmallInteger, nullable=False)
+            #: Distance from parent to child in the hierarchy
+            depth = db.Column(db.SmallInteger, nullable=False)
 
         self.Vote = Vote
         self.VoteSet = VoteSet
@@ -350,14 +422,40 @@ class Commentease(object):
         self.CommentSet = CommentSet
         self.CommentTree = CommentTree
 
+    def enable_voting(self, obj):
+        if isinstance(obj, VotingMixin):
+            obj.allow_voting = True
+            if obj.votes is None:
+                obj.votes = self.VoteSet()
+
+    def enable_commenting(self, obj):
+        """
+        Enable commenting on the given object.
+        """
+        if isinstance(obj, CommentingMixin):
+            obj.allow_commenting = True
+            if obj.comments is None:
+                obj.comments = self.CommentSet()
+
     # View handlers. These functions consolidate all possible actions on a voteset
     # or commentset into one handler each. Implementing apps must provide one view
     # handler for each that performs the necessary basic validations (such as access
     # permissions), looks up the appropriate voteset or commentset, and calls
     # these handlers to implement the rest.
 
+    def forms(self):
+        """
+        Forms for the display templates.
+        """
+        return {
+            'csrf': CsrfForm(),
+            'comment': CommentForm(),
+            'delcomment': DeleteCommentForm()
+            }
+
     # Vote view handler
-    def vote_action(self, voteset):
+    def vote_action(self, voteset, user, permissions=None):
+        permissions = voteset.permissions(user, permissions)
         if request.method == 'POST':
             form = CsrfForm()
             if form.validate():
@@ -374,5 +472,36 @@ class Commentease(object):
                 return form
 
     # Comment view handler
-    def comment_action(self, commentset):
-        pass
+    def comment_action(self, commentset, user, permissions=None):
+        permissions = commentset.permissions(user, permissions)
+        if request.method == 'POST' and 'form.id' in request.form:
+            # Look for form submission
+            commentform = CommentForm()
+            if request.form['form.id'] == 'newcomment' and commentform.validate():
+                if commentform.edit_id.data:
+                    comment = self.Comment.query.get(int(commentform.edit_id.data))
+                    if comment:
+                        if comment.user == g.user:
+                            comment.message = commentform.message.data
+                            comment.edited_at = datetime.utcnow()
+                            flash("Your comment has been edited", "info")
+                        else:
+                            flash("You can only edit your own comments", "info")
+                    else:
+                        flash("No such comment", "error")
+                else:
+                    comment = self.Comment(user=g.user, commentset=commentset,
+                        message=commentform.message.data)
+                    if commentform.reply_to_id.data:
+                        reply_to = self.Comment.query.get(int(commentform.reply_to_id.data))
+                        if reply_to and reply_to.commentset == commentset:
+                            comment.reply_to = reply_to
+                    commentset.count += 1
+                    if comment.votes.pattern == VOTE_PATTERN.UP_DOWN:
+                        # Vote for your own comment
+                        comment.votes.vote(g.user, +1)
+                    self.db.session.add(comment)
+                    flash("Your comment has been posted", "info")
+                self.db.session.commit()
+                return redirect(request.base_url)  # FIXME: Return form and new comment
+        return "Form: %s %s" % (request.method, request.form)
