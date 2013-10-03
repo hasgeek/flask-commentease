@@ -16,10 +16,11 @@ from sqlalchemy import Column, ForeignKey, Boolean
 from sqlalchemy.sql import select
 from sqlalchemy.orm import relationship, backref
 from sqlalchemy.ext.declarative import declared_attr
-import flask.ext.wtf as wtf
+import wtforms
 from coaster.gfm import markdown
 from coaster.sqlalchemy import TimestampMixin, BaseMixin, BaseScopedIdMixin
 from baseframe import assets, Version
+from baseframe.forms import Form
 from ._version import __version__
 
 __all__ = ['Commentease', 'CommentingMixin', 'VotingMixin', 'CommenteaseActionError']
@@ -45,24 +46,24 @@ class COMMENT_STATUS:
     DELETED = 6   # Deleted, but has children and hierarchy needs to be preserved
 
 
-class CsrfForm(wtf.Form):
+class CsrfForm(Form):
     """
     CSRF validation only
     """
     pass
 
 
-class CommentForm(wtf.Form):
+class CommentForm(Form):
     """
     Comment form
     """
-    reply_to_id = wtf.HiddenField("Reply to", default='', id='comment_reply_to_id')
-    edit_id = wtf.HiddenField("Edit", default='', id='comment_edit_id')
-    message = wtf.TextAreaField("Add comment", id='comment_message', validators=[wtf.Required()])
+    comment_reply_to_id = wtforms.HiddenField("Reply to", default='', id='comment_reply_to_id')
+    comment_edit_id = wtforms.HiddenField("Edit", default='', id='comment_edit_id')
+    message = wtforms.TextAreaField("Add comment", id='comment_message', validators=[wtforms.validators.Required()])
 
 
-class DeleteCommentForm(wtf.Form):
-    comment_id = wtf.HiddenField('Comment', validators=[wtf.Required()])
+class DeleteCommentForm(Form):
+    comment_id = wtforms.HiddenField('Comment', validators=[wtforms.validators.Required()])
 
 
 class CommenteaseActionError(Exception):
@@ -478,8 +479,8 @@ class Commentease(object):
             # Look for form submission
             commentform = CommentForm()
             if request.form['form.id'] == 'newcomment' and commentform.validate():
-                if commentform.edit_id.data:
-                    comment = self.Comment.query.get(int(commentform.edit_id.data))
+                if commentform.comment_edit_id.data:
+                    comment = self.Comment.query.get(int(commentform.comment_edit_id.data))
                     if comment:
                         if comment.user == g.user:
                             comment.message = commentform.message.data
@@ -492,8 +493,8 @@ class Commentease(object):
                 else:
                     comment = self.Comment(user=g.user, commentset=commentset,
                         message=commentform.message.data)
-                    if commentform.reply_to_id.data:
-                        reply_to = self.Comment.query.get(int(commentform.reply_to_id.data))
+                    if commentform.comment_reply_to_id.data:
+                        reply_to = self.Comment.query.get(int(commentform.comment_reply_to_id.data))
                         if reply_to and reply_to.commentset == commentset:
                             comment.reply_to = reply_to
                     commentset.count += 1

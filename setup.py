@@ -16,7 +16,7 @@ else:
 requires = [
     'Flask',
     'Flask-SQLAlchemy',
-    'Flask-WTF',
+    'wtforms',
     'coaster',
     'markdown',
     'Pygments',
