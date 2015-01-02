@@ -15,7 +15,7 @@ from flask import g, Blueprint, Markup, request, flash, redirect
 from sqlalchemy import Column, ForeignKey, Boolean
 from sqlalchemy.sql import select
 from sqlalchemy.orm import relationship, backref
-from sqlalchemy.ext.declarative import declared_attr
+from sqlalchemy.ext.declarative import declared_attr, synonym_for
 import wtforms
 from coaster.gfm import markdown
 from coaster.sqlalchemy import TimestampMixin, BaseMixin, BaseScopedIdMixin
