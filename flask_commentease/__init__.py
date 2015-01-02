@@ -26,7 +26,7 @@ from ._version import __version__
 __all__ = ['Commentease', 'CommentingMixin', 'VotingMixin', 'CommenteaseActionError']
 
 version = Version(__version__)
-#assets['commentease.js'][version] = 'commentease/js/commentease.js'
+# assets['commentease.js'][version] = 'commentease/js/commentease.js'
 assets['commentease.css'][version] = 'commentease/css/commentease.css'
 
 
@@ -44,13 +44,6 @@ class COMMENT_STATUS:
     HIDDEN = 4    # Hidden by a moderator/owner
     SPAM = 5      # Marked as spam
     DELETED = 6   # Deleted, but has children and hierarchy needs to be preserved
-
-
-class CsrfForm(Form):
-    """
-    CSRF validation only
-    """
-    pass
 
 
 class CommentForm(Form):
@@ -116,8 +109,9 @@ class Commentease(object):
         self.app = app
         self.db = db
 
-        self.CsrfForm = CsrfForm
+        self.CsrfForm = Form
         self.CommentForm = CommentForm
+        self.DeleteCommentForm = DeleteCommentForm
 
         self.sanitize_tags = ['p', 'br', 'strong', 'em', 'sup', 'sub', 'h3', 'h4', 'h5', 'h6',
                 'ul', 'ol', 'li', 'a', 'blockquote', 'code']
@@ -423,6 +417,20 @@ class Commentease(object):
         self.CommentSet = CommentSet
         self.CommentTree = CommentTree
 
+    # This method is meant for use with Nodular
+    def addmixin(self, model, votes=True, comments=True):
+        """
+        Add the voting and commenting mixins to an existing SQLAlchemy declarative model.
+        """
+        if votes:
+            for key, value in VotingMixin.__dict__.items():
+                if not key.startswith('__'):
+                    setattr(model, key, value)
+        if comments:
+            for key, value in CommentingMixin.__dict__.items():
+                if not key.startswith('__'):
+                    setattr(model, key, value)
+
     def enable_voting(self, obj):
         if isinstance(obj, VotingMixin):
             obj.allow_voting = True
@@ -449,16 +457,16 @@ class Commentease(object):
         Forms for the display templates.
         """
         return {
-            'csrf': CsrfForm(),
-            'comment': CommentForm(),
-            'delcomment': DeleteCommentForm()
+            'csrf': self.CsrfForm(),
+            'comment': self.CommentForm(),
+            'delcomment': self.DeleteCommentForm()
             }
 
     # Vote view handler
     def vote_action(self, voteset, user, permissions=None):
         permissions = voteset.permissions(user, permissions)
         if request.method == 'POST':
-            form = CsrfForm()
+            form = self.CsrfForm()
             if form.validate():
                 action = request.form.get('action')
                 if action == 'vote':
@@ -477,7 +485,7 @@ class Commentease(object):
         permissions = commentset.permissions(user, permissions)
         if request.method == 'POST' and 'form.id' in request.form:
             # Look for form submission
-            commentform = CommentForm()
+            commentform = self.CommentForm()
             if request.form['form.id'] == 'newcomment' and commentform.validate():
                 if commentform.comment_edit_id.data:
                     comment = self.Comment.query.get(int(commentform.comment_edit_id.data))
