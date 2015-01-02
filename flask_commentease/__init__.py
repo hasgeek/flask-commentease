@@ -332,6 +332,7 @@ class Commentease(object):
                 self._message = value
                 self._message_html = markdown(value)
 
+            @synonym_for("_message_html")
             @property
             def message_html(self):
                 return Markup(self._message_html)
