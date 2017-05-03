@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-    flask.ext.commentease
-    ~~~~~~~~~~~~~~~~~~~~~
+    flask_commentease
+    ~~~~~~~~~~~~~~~~~
 
     Flask extension for comments and votes on any database model
 
