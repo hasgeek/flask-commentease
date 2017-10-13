@@ -1,4 +1,4 @@
-{%- from "baseframe/forms.html" import renderfield, ajaxform %}
+{%- from "baseframe/forms.html.jinja2" import renderfield, ajaxform %}
 {% macro commentvote(comment, currentuser, commenturl) %}
   <div class="comment-vote">
     {%- set comvote = comment.votes.getvote(currentuser) %}
