@@ -14,7 +14,7 @@ else:
     raise RuntimeError("Unable to find version string in flask_commentease/_version.py.")
 
 requires = [
-    'Flask',
+    'Flask>=0.10.1',
     'Flask-SQLAlchemy',
     'wtforms',
     'coaster',
